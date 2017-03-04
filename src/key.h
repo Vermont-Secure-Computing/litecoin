@@ -135,7 +135,11 @@ public:
      */
     bool SignCompact(const uint256& hash, std::vector<unsigned char>& vchSig) const;
 
+    // Load private key and check that public key matches.
+    bool Load(CPrivKey &privkey, CPubKey &vchPubKey, bool fSkipCheck);
+
     //! Derive BIP32 child key.
+    //bool Derive(CPubKey& pubkeyChild, unsigned char ccChild[32], unsigned int nChild, const unsigned char cc[32]) const;
     bool Derive(CKey& keyChild, ChainCode &ccChild, unsigned int nChild, const ChainCode& cc) const;
 
     /**
@@ -144,8 +148,6 @@ public:
      */
     bool VerifyPubKey(const CPubKey& vchPubKey) const;
 
-    //! Load private key and check that public key matches.
-    bool Load(CPrivKey& privkey, CPubKey& vchPubKey, bool fSkipCheck);
 
     //! Check whether an element of a signature (r or s) is valid.
     static bool CheckSignatureElement(const unsigned char* vch, int len, bool half);
@@ -166,7 +168,7 @@ struct CExtKey {
 
     void Encode(unsigned char code[BIP32_EXTKEY_SIZE]) const;
     void Decode(const unsigned char code[BIP32_EXTKEY_SIZE]);
-    bool Derive(CExtKey& out, unsigned int nChild) const;
+    bool Derive(CExtKey &out, unsigned int nChild) const;
     CExtPubKey Neuter() const;
     void SetMaster(const unsigned char* seed, unsigned int nSeedLen);
     template <typename Stream>

@@ -190,8 +190,8 @@ public:
     //! Turn this public key into an uncompressed public key.
     bool Decompress();
 
-    //! Derive BIP32 child pubkey.
-    bool Derive(CPubKey& pubkeyChild, ChainCode &ccChild, unsigned int nChild, const ChainCode& cc) const;
+    //! Derive BIP32 child pubkey. 
+    bool Derive(CPubKey& pubkeyChild, unsigned char ccChild[32], unsigned int nChild, const unsigned char cc[32]) const;
 };
 
 struct CExtPubKey {
@@ -209,7 +209,7 @@ struct CExtPubKey {
 
     void Encode(unsigned char code[BIP32_EXTKEY_SIZE]) const;
     void Decode(const unsigned char code[BIP32_EXTKEY_SIZE]);
-    bool Derive(CExtPubKey& out, unsigned int nChild) const;
+    bool Derive(CExtPubKey &out, unsigned int nChild) const;
 
     unsigned int GetSerializeSize(int nType, int nVersion) const
     {
@@ -236,15 +236,5 @@ struct CExtPubKey {
     }
 };
 
-/** Users of this module must hold an ECCVerifyHandle. The constructor and
- *  destructor of these are not allowed to run in parallel, though. */
-class ECCVerifyHandle
-{
-    static int refcount;
-
-public:
-    ECCVerifyHandle();
-    ~ECCVerifyHandle();
-};
 
 #endif // BITCOIN_PUBKEY_H
