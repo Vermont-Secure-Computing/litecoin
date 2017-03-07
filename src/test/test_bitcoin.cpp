@@ -12,7 +12,6 @@
 #include "key.h"
 #include "main.h"
 #include "miner.h"
-#include "pubkey.h"
 #include "random.h"
 #include "txdb.h"
 #include "txmempool.h"
@@ -31,7 +30,6 @@ extern void noui_connect();
 
 BasicTestingSetup::BasicTestingSetup(const std::string& chainName)
 {
-        ECC_Start();
         SetupEnvironment();
         SetupNetworking();
         fPrintToDebugLog = false; // don't want to write to debug.log file
@@ -42,7 +40,6 @@ BasicTestingSetup::BasicTestingSetup(const std::string& chainName)
 
 BasicTestingSetup::~BasicTestingSetup()
 {
-        ECC_Stop();
 }
 
 TestingSetup::TestingSetup(const std::string& chainName) : BasicTestingSetup(chainName)

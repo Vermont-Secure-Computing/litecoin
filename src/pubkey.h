@@ -191,7 +191,8 @@ public:
     bool Decompress();
 
     //! Derive BIP32 child pubkey. 
-    bool Derive(CPubKey& pubkeyChild, unsigned char ccChild[32], unsigned int nChild, const unsigned char cc[32]) const;
+
+    bool Derive(CPubKey& pubkeyChild, ChainCode &ccChild, unsigned int nChild, const ChainCode& cc) const;
 };
 
 struct CExtPubKey {

@@ -2,13 +2,16 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "pubkey.h"
-#include "util.h"
 #include "key.h"
 #include <openssl/ecdsa.h>
 #include <openssl/rand.h>
 #include <openssl/obj_mac.h>
 
+#include "arith_uint256.h"
+#include "crypto/common.h"
+#include "crypto/hmac_sha512.h"
+#include "pubkey.h"
+#include "random.h"
 // anonymous namespace with local implementation code (OpenSSL interaction)
 namespace {
 
@@ -227,9 +230,6 @@ public:
     }
 
     bool Verify(const uint256 &hash, const std::vector<unsigned char>& vchSig) {
-	
-        printf("    inside verify: %s\n", hash.ToString().c_str());
-        //printf("    inside verify sig: %s\n", vchSig[0].ToString().c_str());
         // -1 = error, 0 = bad sig, 1 = good
         if (ECDSA_verify(0, (unsigned char*)&hash, sizeof(hash), &vchSig[0], vchSig.size(), pkey) != 1)
             return false;
@@ -337,145 +337,196 @@ public:
 
 }; // end of anonymous namespace
 
-bool CPubKey::Verify(const uint256 &hash, const std::vector<unsigned char>& vchSig) const {
-        if (vchSig.empty())
+bool CKey::Check(const unsigned char *vch) {
+    // Do not convert to OpenSSL's data structures for range-checking keys,
+    // it's easy enough to do directly.
+    static const unsigned char vchMax[32] = {
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFE,
+        0xBA,0xAE,0xDC,0xE6,0xAF,0x48,0xA0,0x3B,
+        0xBF,0xD2,0x5E,0x8C,0xD0,0x36,0x41,0x40
+    };
+    bool fIsZero = true;
+    for (int i=0; i<32 && fIsZero; i++)
+        if (vch[i] != 0)
+            fIsZero = false;
+    if (fIsZero)
+        return false;
+    for (int i=0; i<32; i++) {
+        if (vch[i] < vchMax[i])
+            return true;
+        if (vch[i] > vchMax[i])
             return false;
+    }
+    return true;
+}
 
-        // New versions of OpenSSL will reject non-canonical DER signatures. de/re-serialize first.
-        unsigned char *norm_der = NULL;
-        ECDSA_SIG *norm_sig = ECDSA_SIG_new();
-        const unsigned char* sigptr = &vchSig[0];
-        assert(norm_sig);
-        if (d2i_ECDSA_SIG(&norm_sig, &sigptr, vchSig.size()) == NULL)
-        {
-            /* As of OpenSSL 1.0.0p d2i_ECDSA_SIG frees and nulls the pointer on
-             * error. But OpenSSL's own use of this function redundantly frees the
-             * result. As ECDSA_SIG_free(NULL) is a no-op, and in the absence of a
-             * clear contract for the function behaving the same way is more
-             * conservative.
-             */
-            ECDSA_SIG_free(norm_sig);
-            return false;
-        }
-        int derlen = i2d_ECDSA_SIG(norm_sig, &norm_der);
-        ECDSA_SIG_free(norm_sig);
-        if (derlen <= 0)
-            return false;
+void CKey::MakeNewKey(bool fCompressedIn) {
+    do {
+        GetStrongRandBytes(vch, sizeof(vch));
+    } while (!Check(vch));
+    fValid = true;
+    fCompressed = fCompressedIn;
+}
 
-        // -1 = error, 0 = bad sig, 1 = good
+void GetPubKey(CPubKey &pubkey, bool fCompressed) {
 	EC_KEY *pkey;
         pkey = EC_KEY_new_by_curve_name(NID_secp256k1);
-        bool ret = ECDSA_verify(0, (unsigned char*)&hash, sizeof(hash), norm_der, derlen, pkey) == 1;
-        OPENSSL_free(norm_der);
-        return ret;
+        EC_KEY_set_conv_form(pkey, fCompressed ? POINT_CONVERSION_COMPRESSED : POINT_CONVERSION_UNCOMPRESSED);
+	int nSize = i2o_ECPublicKey(pkey, NULL);
+	assert(nSize);
+	assert(nSize <= 65);
+	unsigned char c[65];
+	unsigned char *pbegin = c;
+	int nSize2 = i2o_ECPublicKey(pkey, &pbegin);
+	assert(nSize == nSize2);
+	pubkey.Set(&c[0], &c[nSize]);
+}
+	
+CPrivKey CKey::GetPrivKey() const {
+	assert(fValid);
+	CECKey key;
+	key.SetSecretBytes(vch);
+	CPrivKey privkey;
+	key.GetPrivKey(privkey, fCompressed);
+	return privkey;
 }
 
-bool CPubKey::RecoverCompact(const uint256 &hash, const std::vector<unsigned char>& vchSig) {
-    if (vchSig.size() != 65)
+
+CPubKey CKey::GetPubKey() const {
+    assert(fValid);
+    CECKey key;
+    key.SetSecretBytes(vch);
+    CPubKey pubkey;
+    key.GetPubKey(pubkey, fCompressed);
+    return pubkey;
+}
+
+bool CKey::Sign(const uint256 &hash, std::vector<unsigned char>& vchSig, uint32_t test_case) const {
+    if (!fValid)
         return false;
     CECKey key;
-    if (!key.Recover(hash, &vchSig[1], (vchSig[0] - 27) & ~4))
-        return false;
-    key.GetPubKey(*this, (vchSig[0] - 27) & 4);
-    return true;
+    key.SetSecretBytes(vch);
+    return key.Sign(hash, vchSig);
 }
 
-bool CPubKey::IsFullyValid() const {
-    if (!IsValid())
+bool CKey::VerifyPubKey(const CPubKey& pubkey) const {
+    if (pubkey.IsCompressed() != fCompressed) {
+        return false;
+    }
+    unsigned char rnd[8];
+    std::string str = "Bitcoin key verification\n";
+    GetRandBytes(rnd, sizeof(rnd));
+    uint256 hash;
+    CHash256().Write((unsigned char*)str.data(), str.size()).Write(rnd, sizeof(rnd)).Finalize(hash.begin());
+    std::vector<unsigned char> vchSig;
+    Sign(hash, vchSig);
+    return pubkey.Verify(hash, vchSig);
+}
+
+bool CKey::SignCompact(const uint256 &hash, std::vector<unsigned char>& vchSig) const {
+    if (!fValid)
         return false;
     CECKey key;
-    if (!key.SetPubKey(*this))
+    key.SetSecretBytes(vch);
+    vchSig.resize(65);
+    int rec = -1;
+    if (!key.SignCompact(hash, &vchSig[1], rec))
         return false;
+    assert(rec != -1);
+    vchSig[0] = 27 + rec + (fCompressed ? 4 : 0);
     return true;
 }
-
-bool CPubKey::Decompress() {
-    if (!IsValid())
-        return false;
-    CECKey key;
-    if (!key.SetPubKey(*this))
-        return false;
-    key.GetPubKey(*this, false);
-    return true;
-}
-
-bool CPubKey::Derive(CPubKey& pubkeyChild, ChainCode &ccChild, unsigned int nChild, const ChainCode& cc) const {
+bool CKey::Derive(CKey& keyChild, ChainCode &ccChild, unsigned int nChild, const ChainCode& cc) const {
     assert(IsValid());
-    assert((nChild >> 31) == 0);
-    assert(begin() + 33 == end());
+    assert(IsCompressed());
     unsigned char out[64];
-    BIP32Hash(cc, nChild, *begin(), begin()+1, out);
+    LockObject(out);
+    if ((nChild >> 31) == 0) {
+        CPubKey pubkey = GetPubKey();
+        assert(pubkey.begin() + 33 == pubkey.end());
+        BIP32Hash(cc, nChild, *pubkey.begin(), pubkey.begin()+1, out);
+    } else {
+        assert(begin() + 32 == end());
+        BIP32Hash(cc, nChild, 0, begin(), out);
+    }
     memcpy(ccChild.begin(), out+32, 32);
-    CECKey key;
-    bool ret = key.SetPubKey(*this);
-    ret &= key.TweakPublic(out);
-    key.GetPubKey(pubkeyChild, true);
+    memcpy((unsigned char*)keyChild.begin(), begin(), 32);
+    bool ret = CECKey::TweakSecret((unsigned char*)keyChild.begin(), begin(), out);
+    //bool ret = secp256k1_ec_privkey_tweak_add(secp256k1_context_sign, (unsigned char*)keyChild.begin(), out);
+    UnlockObject(out);
+    keyChild.fCompressed = true;
+    keyChild.fValid = ret;
     return ret;
 }
 
-void CExtPubKey::Encode(unsigned char code[BIP32_EXTKEY_SIZE]) const {
+bool CKey::Load(CPrivKey &privkey, CPubKey &vchPubKey, bool fSkipCheck=false) {
+    CECKey key;
+    if (!key.SetPrivKey(privkey))
+        return false;
+
+    key.GetSecretBytes(vch);
+    fCompressed = vchPubKey.IsCompressed();
+    fValid = true;
+
+    if (fSkipCheck)
+        return true;
+
+    if (GetPubKey() != vchPubKey)
+        return false;
+
+    return true;
+}
+
+bool CExtKey::Derive(CExtKey &out, unsigned int nChild) const {
+    out.nDepth = nDepth + 1;
+    CKeyID id = key.GetPubKey().GetID();
+    memcpy(&out.vchFingerprint[0], &id, 4);
+    out.nChild = nChild;
+    return key.Derive(out.key, out.chaincode, nChild, chaincode);
+}
+
+void CExtKey::SetMaster(const unsigned char *seed, unsigned int nSeedLen) {
+    static const unsigned char hashkey[] = {'B','i','t','c','o','i','n',' ','s','e','e','d'};
+    unsigned char out[64];
+    LockObject(out);
+    CHMAC_SHA512(hashkey, sizeof(hashkey)).Write(seed, nSeedLen).Finalize(out);
+    key.Set(&out[0], &out[32], true);
+    memcpy(chaincode.begin(), &out[32], 32);
+    UnlockObject(out);
+    nDepth = 0;
+    nChild = 0;
+    memset(vchFingerprint, 0, sizeof(vchFingerprint));
+}
+
+CExtPubKey CExtKey::Neuter() const {
+    CExtPubKey ret;
+    ret.nDepth = nDepth;
+    memcpy(&ret.vchFingerprint[0], &vchFingerprint[0], 4);
+    ret.nChild = nChild;
+    ret.pubkey = key.GetPubKey();
+    ret.chaincode = chaincode;
+    return ret;
+}
+
+void CExtKey::Encode(unsigned char code[BIP32_EXTKEY_SIZE]) const {
     code[0] = nDepth;
     memcpy(code+1, vchFingerprint, 4);
     code[5] = (nChild >> 24) & 0xFF; code[6] = (nChild >> 16) & 0xFF;
     code[7] = (nChild >>  8) & 0xFF; code[8] = (nChild >>  0) & 0xFF;
     memcpy(code+9, chaincode.begin(), 32);
-    assert(pubkey.size() == 33);
-    memcpy(code+41, pubkey.begin(), 33);
+    code[41] = 0;
+    assert(key.size() == 32);
+    memcpy(code+42, key.begin(), 32);
 }
 
-void CExtPubKey::Decode(const unsigned char code[BIP32_EXTKEY_SIZE]) {
+void CExtKey::Decode(const unsigned char code[BIP32_EXTKEY_SIZE]) {
     nDepth = code[0];
     memcpy(vchFingerprint, code+1, 4);
     nChild = (code[5] << 24) | (code[6] << 16) | (code[7] << 8) | code[8];
     memcpy(chaincode.begin(), code+9, 32);
-    pubkey.Set(code+41, code+BIP32_EXTKEY_SIZE);
+    key.Set(code+42, code+BIP32_EXTKEY_SIZE, true);
 }
 
-bool CExtPubKey::Derive(CExtPubKey &out, unsigned int nChild) const {
-    out.nDepth = nDepth + 1;
-    CKeyID id = pubkey.GetID();
-    memcpy(&out.vchFingerprint[0], &id, 4);
-    out.nChild = nChild;
-    return pubkey.Derive(out.pubkey, out.chaincode, nChild, chaincode);
-}
 
-/* static */ bool CPubKey::CheckLowS(const std::vector<unsigned char>& vchSig) {
-
-// lets just recheck all canonical signature stuff here.if (vchSig.size() < 9)
-        return error("Non-canonical signature: too short");
-    if (vchSig.size() > 73)
-        return error("Non-canonical signature: too long");
-    if (vchSig[0] != 0x30)
-        return error("Non-canonical signature: wrong type");
-    if (vchSig[1] != vchSig.size()-3)
-        return error("Non-canonical signature: wrong length marker");
-    unsigned int nLenR = vchSig[3];
-    if (5 + nLenR >= vchSig.size())
-        return error("Non-canonical signature: S length misplaced");
-    unsigned int nLenS = vchSig[5+nLenR];
-    if ((unsigned long)(nLenR+nLenS+7) != vchSig.size())
-        return error("Non-canonical signature: R+S length mismatch");
-
-    const unsigned char *R = &vchSig[4];
-    if (R[-2] != 0x02)
-        return error("Non-canonical signature: R value type mismatch");
-    if (nLenR == 0)
-        return error("Non-canonical signature: R length is zero");
-    if (R[0] & 0x80)
-        return error("Non-canonical signature: R value negative");
-    if (nLenR > 1 && (R[0] == 0x00) && !(R[1] & 0x80))
-        return error("Non-canonical signature: R value excessively padded");
-
-    const unsigned char *S = &vchSig[6+nLenR];
-    if (S[-2] != 0x02)
-        return error("Non-canonical signature: S value type mismatch");
-    if (nLenS == 0)
-        return error("Non-canonical signature: S length is zero");
-    if (S[0] & 0x80)
-        return error("Non-canonical signature: S value negative");
-    if (nLenS > 1 && (S[0] == 0x00) && !(S[1] & 0x80))
-        return error("Non-canonical signature: S value excessively padded");
-
-    return true;
-}
 

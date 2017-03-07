@@ -7,7 +7,6 @@
 
 #include "chainparamsbase.h"
 #include "key.h"
-#include "pubkey.h"
 #include "txdb.h"
 #include "txmempool.h"
 
