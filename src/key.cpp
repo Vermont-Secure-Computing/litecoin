@@ -14,6 +14,14 @@
 #include "random.h"
 #include "util.h"
 
+//for debug
+#include "uint256.h"
+#include "util.h"
+#include "utilstrencodings.h"
+
+#include <string>
+#include <vector>
+
 // anonymous namespace with local implementation code (OpenSSL interaction)
 namespace {
 
@@ -204,7 +212,16 @@ public:
         return o2i_ECPublicKey(&pkey, &pbegin, pubkey.size());
     }
 
+    /*bool Sign(const uint256 &hash, std::vector<unsigned char>& vchSig) {
+        unsigned int nSize = ECDSA_size(pkey);
+        vchSig.resize(nSize); // Make sure it is big enough
+        assert(ECDSA_sign(0, (unsigned char*)&hash, sizeof(hash), &vchSig[0], &nSize, pkey));
+        vchSig.resize(nSize); // Shrink to fit actual size
+        return true;
+    }*/
+
     bool Sign(const uint256 &hash, std::vector<unsigned char>& vchSig) {
+        //printf("called internal sign  ECKey member function \n");
         vchSig.clear();
         ECDSA_SIG *sig = ECDSA_do_sign((unsigned char*)&hash, sizeof(hash), pkey);
         if (sig == NULL)
@@ -237,6 +254,48 @@ public:
             return false;
         return true;
     }
+/*
+
+bool CKey::SignCompact(uint256 hash, std::vector<unsigned char>& vchSig)
+{
+    bool fOk = false;
+    ECDSA_SIG *sig = ECDSA_do_sign((unsigned char*)&hash, sizeof(hash), pkey);
+    if (sig==NULL)
+        return false;
+    vchSig.clear();
+    vchSig.resize(65,0);
+    int nBitsR = BN_num_bits(sig->r);
+    int nBitsS = BN_num_bits(sig->s);
+    if (nBitsR <= 256 && nBitsS <= 256)
+    {
+        int nRecId = -1;
+        for (int i=0; i<4; i++)
+        {
+            CKey keyRec;
+            keyRec.fSet = true;
+            if (fCompressedPubKey)
+                keyRec.SetCompressedPubKey();
+            if (ECDSA_SIG_recover_key_GFp(keyRec.pkey, sig, (unsigned char*)&hash, sizeof(hash), i, 1) == 1)
+                if (keyRec.GetPubKey() == this->GetPubKey())
+                {
+                    nRecId = i;
+                    break;
+                }
+        }
+
+        if (nRecId == -1)
+            throw key_error("CKey::SignCompact() : unable to construct recoverable key");
+
+        vchSig[0] = nRecId+27+(fCompressedPubKey ? 4 : 0);
+        BN_bn2bin(sig->r,&vchSig[33-(nBitsR+7)/8]);
+        BN_bn2bin(sig->s,&vchSig[65-(nBitsS+7)/8]);
+        fOk = true;
+    }
+    ECDSA_SIG_free(sig);
+    return fOk;
+}
+*/
+
 
     bool SignCompact(const uint256 &hash, unsigned char *p64, int &rec) {
         bool fOk = false;
@@ -420,10 +479,52 @@ bool CKey::VerifyPubKey(const CPubKey& pubkey) const {
     Sign(hash, vchSig);
     return pubkey.Verify(hash, vchSig);
 }
+/*
+bool CKey::SignCompact(const uint256 &hash, std::vector<unsigned char>& vchSig) const {
+
+    bool fOk = false;
+    ECDSA_SIG *sig = ECDSA_do_sign((unsigned char*)&hash, sizeof(hash), pkey);
+    if (sig==NULL)
+        return false;
+    vchSig.clear();
+    vchSig.resize(65,0);
+    int nBitsR = BN_num_bits(sig->r);
+    int nBitsS = BN_num_bits(sig->s);
+    if (nBitsR <= 256 && nBitsS <= 256)
+    {
+        int nRecId = -1;
+        for (int i=0; i<4; i++)
+        {
+            CKey keyRec;
+            keyRec.fSet = true;
+            if (fCompressedPubKey)
+                keyRec.SetCompressedPubKey();
+            if (ECDSA_SIG_recover_key_GFp(keyRec.pkey, sig, (unsigned char*)&hash, sizeof(hash), i, 1) == 1)
+                if (keyRec.GetPubKey() == this->GetPubKey())
+                {
+                    nRecId = i;
+                    break;
+                }
+        }
+
+        if (nRecId == -1)
+            throw key_error("CKey::SignCompact() : unable to construct recoverable key");
+
+        vchSig[0] = nRecId+27+(fCompressedPubKey ? 4 : 0);
+        BN_bn2bin(sig->r,&vchSig[33-(nBitsR+7)/8]);
+        BN_bn2bin(sig->s,&vchSig[65-(nBitsS+7)/8]);
+        fOk = true;
+    }
+    ECDSA_SIG_free(sig);
+    return fOk;
+} */
+
 
 bool CKey::SignCompact(const uint256 &hash, std::vector<unsigned char>& vchSig) const {
+    //printf("called external signcompact with vchSig:   %s\n", HexStr(vchSig).c_str());
     if (!fValid)
         return false;
+    //printf("made it past fvalid in external defined signcompact \n");
     CECKey key;
     key.SetSecretBytes(vch);
     vchSig.resize(65);
@@ -522,7 +623,7 @@ bool CKey::Derive(CKey& keyChild, ChainCode &ccChild, unsigned int nChild, const
         BIP32Hash(cc, nChild, 0, begin(), out);
     }
     memcpy(ccChild.begin(), out+32, 32);
-    memcpy((unsigned char*)keyChild.begin(), begin(), 32);
+    //memcpy((unsigned char*)keyChild.begin(), begin(), 32);
     bool ret = CECKey::TweakSecret((unsigned char*)keyChild.begin(), begin(), out);
     //bool ret = secp256k1_ec_privkey_tweak_add(secp256k1_context_sign, (unsigned char*)keyChild.begin(), out);
     UnlockObject(out);
@@ -632,9 +733,11 @@ bool ECC_InitSanityCheck() {
     return true;
 }
 
-/* static */ bool CPubKey::CheckLowS(const std::vector<unsigned char>& vchSig) {
-
-// lets just recheck all canonical signature stuff here.if (vchSig.size() < 9)
+/* static */ 
+bool CPubKey::CheckLowS(const std::vector<unsigned char>& vchSig) {
+/*
+// lets just recheck all canonical signature stuff here.
+    if (vchSig.size() < 9)
         return error("Non-canonical signature: too short");
     if (vchSig.size() > 73)
         return error("Non-canonical signature: too long");
@@ -658,7 +761,13 @@ bool ECC_InitSanityCheck() {
         return error("Non-canonical signature: R value negative");
     if (nLenR > 1 && (R[0] == 0x00) && !(R[1] & 0x80))
         return error("Non-canonical signature: R value excessively padded");
+*/
 
+
+    unsigned int nLenR = vchSig[3];
+    if (5 + nLenR >= vchSig.size())
+        return error("Non-canonical signature: S length misplaced");
+    unsigned int nLenS = vchSig[5+nLenR];
     const unsigned char *S = &vchSig[6+nLenR];
     if (S[-2] != 0x02)
         return error("Non-canonical signature: S value type mismatch");
