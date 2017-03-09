@@ -92,6 +92,7 @@ BITCOIN_CORE_H = \
   consensus/consensus.h \
   core_io.h \
   core_memusage.h \
+  ecwrapper.h\
   httprpc.h \
   httpserver.h \
   indirectmap.h \
@@ -287,6 +288,7 @@ libbitcoin_common_a_SOURCES = \
   compressor.cpp \
   core_read.cpp \
   core_write.cpp \
+  ecwrapper.cpp\
   key.cpp \
   keystore.cpp \
   netbase.cpp \
